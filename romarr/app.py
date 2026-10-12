@@ -4396,13 +4396,6 @@ class ROMarr:
                 log.warning("%s completed() failed: %s", getattr(client, "name", client), err)
         for torrent in finished:
             name = torrent.get("name", "")
-            # The client reports the path IT sees. When it runs in a different
-            # container that path means nothing here, and the import fails with
-            # "download path does not exist" while the file sits right there.
-            path = map_remote_path(
-                torrent.get("content_path") or torrent.get("save_path", ""),
-                self.store.settings.get("remote_path_mappings"),
-            )
             platform = None
             queue_item = None
             with self._lock:
@@ -4415,6 +4408,15 @@ class ROMarr:
                 continue
             if platform is None:
                 continue
+            # Resolve the path only for work that still needs importing. Move
+            # mode deliberately removes it, while the download client can keep
+            # reporting the completed row indefinitely; checking that stale
+            # path before the queue state produced a warning every minute for
+            # a game already safe in the library.
+            path = map_remote_path(
+                torrent.get("content_path") or torrent.get("save_path", ""),
+                self.store.settings.get("remote_path_mappings"),
+            )
             # Which library this platform belongs to. A platform rule wins over
             # the default, so "PSX goes to Gaseous" is one row in the Libraries
             # page rather than a second ROMarr.
