@@ -148,7 +148,7 @@ class _Source:
     def read(self, name: str) -> bytes | None:
         raise NotImplementedError
 
-    def copy(self, name: str, destination: Path) -> None:
+    def copy(self, name: str, destination: Path, *, move: bool = False) -> None:
         raise NotImplementedError
 
 
@@ -164,7 +164,7 @@ class _ZipSource(_Source):
         with zipfile.ZipFile(self.path) as archive:
             return archive.read(name)
 
-    def copy(self, name, destination):
+    def copy(self, name, destination, *, move=False):
         with zipfile.ZipFile(self.path) as archive, \
                 archive.open(name) as src, open(destination, "wb") as dst:
             shutil.copyfileobj(src, dst)
@@ -195,7 +195,7 @@ class _BsdtarSource(_Source):
     def read(self, name):
         return self._run(["-xOf", str(self.path), name]).stdout
 
-    def copy(self, name, destination):
+    def copy(self, name, destination, *, move=False):
         with open(destination, "wb") as dst:
             subprocess.run([self.tool, "-xOf", str(self.path), name],
                            stdout=dst, check=True, timeout=600)
@@ -220,8 +220,11 @@ class _PathSource(_Source):
         except OSError:
             return None
 
-    def copy(self, name, destination):
+    def copy(self, name, destination, *, move=False):
         source = self.path if self.path.is_file() else self.path / name
+        if move:
+            os.replace(source, destination)
+            return
         # The source belongs to the download client.  Copy its bytes, not its
         # permission bits: propagating a client's private 0700/0600 mode made
         # the imported library file unreadable to the shared media group.
@@ -327,7 +330,8 @@ def platform_dir(library_root: Path, platform: "Platform | str", *,
 def import_rom(download: Path, platform: Platform, library_root: Path, *,
                overwrite: bool = False, dats=None,
                require_verified: bool = False,
-               layout: str = "flat", translation: bool = False) -> list[ImportResult]:
+               layout: str = "flat", translation: bool = False,
+               move: bool = False) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -379,7 +383,16 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                 results.append(
                     ImportResult(False, destination, "already in the library"))
                 continue
-            source.copy(chosen.primary, destination)
+            try:
+                source.copy(chosen.primary, destination, move=move)
+            except OSError as err:
+                action = "move" if move else "copy"
+                detail = ("; the download and library must share the same "
+                          "mount" if move else "")
+                results.append(ImportResult(
+                    False, None,
+                    f"could not {action} the ROM ({err.strerror or err}){detail}"))
+                continue
             log.info("imported %s -> %s", chosen.primary, destination)
             results.append(ImportResult(True, destination,
                                         verification=verdict))
@@ -411,12 +424,30 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     f"({written[name]} and {member}); refusing to guess which "
                     "one the game needs"))
                 break
-            source.copy(member, destination / name)
+            try:
+                source.copy(member, destination / name, move=move)
+            except OSError as err:
+                action = "move" if move else "copy"
+                detail = ("; the download and library must share the same "
+                          "mount" if move else "")
+                results.append(ImportResult(
+                    False, destination,
+                    f"could not {action} {name!r} "
+                    f"({err.strerror or err}){detail}"))
+                break
             written[name] = member
         else:
             log.info("imported %d files -> %s", len(written), destination)
             results.append(ImportResult(True, destination,
                                         verification=verdict))
+
+    if (move and results and all(result.ok for result in results)
+            and isinstance(source, (_ZipSource, _BsdtarSource))):
+        try:
+            download.unlink()
+        except OSError as err:
+            log.warning("import succeeded but the source archive could not "
+                        "be removed: %s", err)
 
     return results
 

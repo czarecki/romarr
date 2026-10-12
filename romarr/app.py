@@ -4437,7 +4437,9 @@ class ROMarr:
             outcomes = import_rom(
                 path, platform, self.library_root(target_cfg),
                 layout=self.library_layout(target_cfg),
-                translation=is_translation(name))
+                translation=is_translation(name),
+                move=bool(self.store.settings.get(
+                    "move_completed_downloads", False)))
             if not outcomes:
                 self.store.record(Event(kind="failed", game=name,
                                         platform=platform.slug,

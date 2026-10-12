@@ -205,6 +205,32 @@ def test_a_finished_download_with_no_library_is_recorded_not_dropped(tmp_path):
                for e in s.store.history())
 
 
+def test_import_completed_moves_the_download_when_move_mode_is_enabled(tmp_path):
+    library = tmp_path / "roms"
+    download = tmp_path / "downloads" / "Contra (USA).nes"
+    download.parent.mkdir()
+    download.write_bytes(b"rom")
+    s = svc(tmp_path, LIBRARY_KIND="folder", LIBRARY_PATH=str(library))
+    s.store.settings["move_completed_downloads"] = True
+    s.queue.append(QueueItem(
+        "Contra", "nes", download.name, 1, "grabbed", ""))
+
+    class FakeClient:
+        name = "fake"
+        configured = True
+
+        def completed(self):
+            return [{"name": download.name, "content_path": str(download)}]
+
+    s.clients = [FakeClient()]
+
+    result = s.import_finished()[0]
+
+    assert result["ok"]
+    assert not download.exists()
+    assert (library / "nes" / download.name).read_bytes() == b"rom"
+
+
 def test_adding_a_library_clears_the_stale_no_library_message(tmp_path):
     """The background refresh caches "no library configured" and then sleeps for
     COUNT_TTL. Adding a library used to leave that message on the shelf for five

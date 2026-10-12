@@ -263,6 +263,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "indexers": [],
     # Behaviour
     "auto_import": True,
+    "move_completed_downloads": False,
     "rescan_after_import": True,
     # Failed download handling, the same idea Radarr and Sonarr have: a
     # release that could not be downloaded is not one to choose again. When

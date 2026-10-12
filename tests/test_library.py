@@ -1,5 +1,6 @@
 import logging
 import os
+import errno
 import stat
 import zipfile
 from pathlib import Path
@@ -71,6 +72,26 @@ def test_imports_the_rom_from_a_zip_into_the_platform_folder(tmp_path):
     assert result.destination.read_bytes()[:2] == b"\x00\x00"
 
 
+def test_move_import_removes_an_archive_only_after_successful_extraction(tmp_path):
+    library = tmp_path / "library"
+    archive = make_zip(tmp_path / "g.zip", ["Super Mario World (USA).smc"])
+
+    result = import_rom(archive, SNES, library, move=True)
+
+    assert result.ok
+    assert result.destination.read_bytes()[:2] == b"\x00\x00"
+    assert not archive.exists()
+
+
+def test_move_import_keeps_an_archive_when_no_rom_can_be_imported(tmp_path):
+    archive = make_zip(tmp_path / "g.zip", ["readme.nfo"])
+
+    result = import_rom(archive, SNES, tmp_path / "library", move=True)
+
+    assert not result.ok
+    assert archive.exists()
+
+
 def test_imports_a_bare_rom_file(tmp_path):
     library = tmp_path / "library"
     rom = tmp_path / "Zelda (USA).smc"
@@ -79,6 +100,40 @@ def test_imports_a_bare_rom_file(tmp_path):
     result = import_rom(rom, SNES, library)
     assert result.ok
     assert result.destination == library / "snes" / "Zelda (USA).smc"
+
+
+def test_move_import_rehomes_a_bare_rom_without_leaving_the_download(tmp_path):
+    library = tmp_path / "library"
+    download = tmp_path / "downloads" / "Zelda (USA).smc"
+    download.parent.mkdir()
+    download.write_bytes(b"rom")
+
+    result = import_rom(download, SNES, library, move=True)
+
+    assert result.ok
+    assert result.destination == library / "snes" / "Zelda (USA).smc"
+    assert result.destination.read_bytes() == b"rom"
+    assert not download.exists()
+
+
+def test_failed_move_keeps_the_download_and_reports_the_mount_problem(
+        tmp_path, monkeypatch):
+    library = tmp_path / "library"
+    download = tmp_path / "downloads" / "Zelda (USA).smc"
+    download.parent.mkdir()
+    download.write_bytes(b"rom")
+
+    def across_mounts(source, destination):
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr(os, "replace", across_mounts)
+
+    result = import_rom(download, SNES, library, move=True)
+
+    assert not result.ok
+    assert "same mount" in result.reason
+    assert download.read_bytes() == b"rom"
+    assert not (library / "snes" / download.name).exists()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
