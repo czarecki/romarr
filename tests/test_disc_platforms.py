@@ -17,7 +17,7 @@ from romarr.platforms import CARTRIDGE, COMPUTER, DISC, MB, GB, Platform, resolv
 
 
 DISC_SLUGS = (
-    "psx", "ps2", "ps3", "psp", "saturn", "segacd", "dc", "ngc", "wii",
+    "psx", "ps2", "ps3", "ps4", "psp", "saturn", "segacd", "dc", "ngc", "wii",
     "wiiu", "xbox", "xbox360", "3do",
     "philips-cd-i", "pc-fx", "turbografx-16-slash-pc-engine-cd",
     "amiga-cd32", "neo-geo-cd", "atari-jaguar-cd",
@@ -75,6 +75,7 @@ def test_cartridge_ceilings_are_unchanged():
     # Blu-ray. PS3 dual layer is 50GB (largest measured 44.8GB); a Wii U
     # disc is 25GB (largest measured 22.4GB).
     ("ps3", 48 * GB, 96 * GB),
+    ("ps4", 40 * GB, 160 * GB),
     ("wiiu", 24 * GB, 48 * GB),
 ])
 def test_disc_ceilings_clear_one_disc_without_admitting_a_repack(slug, floor, ceiling):
@@ -91,7 +92,9 @@ def test_disc_platforms_prefer_a_single_file_image_first():
     tracks. A `.cue` can, and routinely is -- which is the failure this
     ordering exists to make unlikely in the first place.
     """
-    whole_disc = {".chd", ".rvz", ".iso", ".cso", ".pbp", ".wbfs", ".gdi"}
+    whole_disc = {
+        ".chd", ".rvz", ".iso", ".cso", ".pbp", ".wbfs", ".gdi", ".pkg",
+    }
     for slug in DISC_SLUGS:
         platform = platforms.by_slug(slug)
         assert platform.extensions[0] in whole_disc, (
