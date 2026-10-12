@@ -55,7 +55,7 @@ class _BlueRomsMagnetParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs) -> None:
         values = dict(attrs)
         if tag == "button" and values.get("id") == "magnet-button":
-            self.encoded = values.get("data-link", "")
+            self.encoded = values.get("data-link") or ""
 
 
 def _blueroms_magnet(body: str) -> str:
@@ -202,15 +202,21 @@ class Prowlarr:
         if str(row.get("indexer") or "").casefold() != "blueroms":
             return row
         guid = str(row.get("guid") or "")
-        parsed = urlparse(guid)
+        try:
+            parsed = urlparse(guid)
+            hostname = (parsed.hostname or "").casefold()
+        except ValueError:
+            return row
         if (parsed.scheme != "https"
-                or (parsed.hostname or "").casefold() not in {
-                    "blueroms.ws", "www.blueroms.ws"}
+                or hostname not in {"blueroms.ws", "www.blueroms.ws"}
                 or not parsed.path.startswith("/download/")):
             return row
         try:
-            response = self._session.get(guid, timeout=self._config.timeout)
+            response = self._session.get(
+                guid, timeout=self._config.timeout, allow_redirects=False)
             response.raise_for_status()
+            if 300 <= response.status_code < 400:
+                return row
             magnet = _blueroms_magnet(response.text)
         except requests.RequestException as err:
             log.warning("could not resolve BlueRoms magnet: %s",
