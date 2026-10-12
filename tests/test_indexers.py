@@ -7,12 +7,14 @@ will not reliably produce on demand.
 """
 
 import base64
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
 from romarr.indexers import (
-    Prowlarr, ProwlarrConfig, Torznab, TorznabConfig, _blueroms_magnet, build_indexer,
-    indexer_categories, redact_indexer, sanitise_for_display,
+    Prowlarr, ProwlarrConfig, Torznab, TorznabConfig, _blueroms_magnet,
+    _search_terms, build_indexer, indexer_categories, redact_indexer,
+    sanitise_for_display,
 )
 
 
@@ -216,6 +218,76 @@ def test_blueroms_base64_button_becomes_a_literal_magnet():
     release = client.search("God of War Remastered")[0]
 
     assert release.download_url == magnet
+
+
+def test_arabic_three_search_also_finds_the_roman_numeral_title():
+    magnet = "magnet:?xt=urn:btih:" + "E" * 40
+    encoded = base64.b64encode(magnet.encode("ascii")).decode("ascii")
+
+    class _VariantSession:
+        page_url = "https://www.blueroms.ws/download/god-of-war-iii"
+
+        def __init__(self):
+            self.search_terms = []
+
+        def get(self, url, **kw):
+            if "/api/v1/search?" in url:
+                term = parse_qs(urlparse(url).query)["query"][0]
+                self.search_terms.append(term)
+                if term == "god of war 3 remastered":
+                    return _FakeResponse([{
+                        "title": "God of War Remastered",
+                        "indexerId": 5,
+                        "indexer": "1337x",
+                        "guid": "magnet:?xt=urn:btih:" + "F" * 40,
+                        "categories": [{"id": 1180}],
+                    }])
+                if term == "god of war III remastered":
+                    return _FakeResponse([{
+                        "title": "God of War Remastered",
+                        "indexerId": 5,
+                        "indexer": "1337x",
+                        "guid": "magnet:?xt=urn:btih:" + "F" * 40,
+                        "categories": [{"id": 1180}],
+                    }, {
+                        "title": "God of War III Remastered - PlayStation 4",
+                        "indexerId": 4,
+                        "indexer": "BlueRoms",
+                        "guid": self.page_url,
+                        "downloadUrl": "http://prowlarr:9696/4/download?apikey=SECRET",
+                        "categories": [{"id": 1180}],
+                    }])
+            if url.endswith("/api/v1/indexer"):
+                return _FakeResponse([
+                    {"id": 4, "privacy": "public"},
+                    {"id": 5, "privacy": "public"},
+                ])
+            if url == self.page_url:
+                return _FakeResponse(
+                    text=f'<button id="magnet-button" data-link="{encoded}">')
+            raise AssertionError(f"unexpected request: {url}")
+
+    session = _VariantSession()
+    client = Prowlarr(
+        ProwlarrConfig(base_url="http://prowlarr:9696", api_key="k"), session)
+
+    releases = client.search("god of war 3 remastered")
+
+    assert session.search_terms == [
+        "god of war 3 remastered", "god of war III remastered"]
+    assert [release.indexer for release in releases] == ["1337x", "BlueRoms"]
+    assert releases[1].download_url == magnet
+
+
+@pytest.mark.parametrize(("term", "expected"), [
+    ("God of War III Remastered",
+     ("God of War III Remastered", "God of War 3 Remastered")),
+    ("PlayStation 3 game", ("PlayStation 3 game", "PlayStation III game")),
+    ("A 3D game", ("A 3D game",)),
+    ("Final Fantasy VIII", ("Final Fantasy VIII",)),
+])
+def test_three_search_variant_only_replaces_a_standalone_token(term, expected):
+    assert _search_terms(term) == expected
 
 
 def test_blueroms_malformed_payload_keeps_the_prowlarr_fallback():

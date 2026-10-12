@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import urlencode, urlparse
@@ -32,6 +33,9 @@ log = logging.getLogger(__name__)
 
 # Newznab category ids sent with every search. Console + PC games only.
 SEARCH_CATEGORIES = (1000, 4050)
+
+_ARABIC_THREE = re.compile(r"(?<!\w)3(?!\w)")
+_ROMAN_THREE = re.compile(r"(?<!\w)iii(?!\w)", re.IGNORECASE)
 
 
 # Trackers merged into a rebuilt magnet. An infoHash alone is enough only if
@@ -67,6 +71,30 @@ def _blueroms_magnet(body: str) -> str:
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return ""
     return decoded if decoded.startswith("magnet:") else ""
+
+
+def _search_terms(term: str) -> tuple[str, ...]:
+    """Add the spelling BlueRoms may use for a standalone 3/III token."""
+    if _ARABIC_THREE.search(term):
+        return term, _ARABIC_THREE.sub("III", term)
+    if _ROMAN_THREE.search(term):
+        return term, _ROMAN_THREE.sub("3", term)
+    return (term,)
+
+
+def _result_identity(row: dict) -> tuple:
+    """Stable enough identity for the same Prowlarr result across queries."""
+    locator = next((str(row.get(field) or "") for field in
+                    ("infoHash", "guid", "downloadUrl", "magnetUrl")
+                    if row.get(field)), "")
+    if locator:
+        return (row.get("indexerId"), locator)
+    return (
+        row.get("indexerId"),
+        str(row.get("title") or "").casefold(),
+        int(row.get("size") or 0),
+        str(row.get("protocol") or "torrent").casefold(),
+    )
 
 
 def _download_link(row: dict, *, private: bool = False) -> str:
@@ -229,16 +257,25 @@ class Prowlarr:
 
     def search(self, term: str, *, limit: int = 100) -> list[Release]:
         """Search every configured indexer for a game."""
-        url = self._url("search", query=term, categories=list(SEARCH_CATEGORIES),
-                        type="search", limit=limit)
-        response = self._session.get(
-            url, headers={"X-Api-Key": self._config.api_key},
-            timeout=self._config.timeout,
-        )
-        response.raise_for_status()
+        rows = []
+        seen = set()
+        for query in _search_terms(term):
+            url = self._url("search", query=query,
+                            categories=list(SEARCH_CATEGORIES),
+                            type="search", limit=limit)
+            response = self._session.get(
+                url, headers={"X-Api-Key": self._config.api_key},
+                timeout=self._config.timeout,
+            )
+            response.raise_for_status()
+            for row in response.json():
+                identity = _result_identity(row)
+                if identity not in seen:
+                    seen.add(identity)
+                    rows.append(row)
         privacy = self._private_ids()
         return [self._to_release(self._resolve_blueroms(row), privacy)
-                for row in response.json()]
+                for row in rows]
 
     @staticmethod
     def _to_release(row: dict, privacy: dict[int, bool] | None = None) -> Release:
