@@ -17,9 +17,12 @@ Two things here are load-bearing and easy to get wrong:
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 from dataclasses import dataclass
-from urllib.parse import urlencode
+from html.parser import HTMLParser
+from urllib.parse import urlencode, urlparse
 
 import requests
 
@@ -40,6 +43,30 @@ _DEFAULT_TRACKERS = (
     "udp://tracker.openbittorrent.com:6969/announce",
     "udp://exodus.desync.com:6969/announce",
 )
+
+
+class _BlueRomsMagnetParser(HTMLParser):
+    """Read the encoded magnet from BlueRoms' JavaScript-backed button."""
+
+    def __init__(self):
+        super().__init__()
+        self.encoded = ""
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        values = dict(attrs)
+        if tag == "button" and values.get("id") == "magnet-button":
+            self.encoded = values.get("data-link", "")
+
+
+def _blueroms_magnet(body: str) -> str:
+    """Decode BlueRoms' button payload, accepting only a literal magnet."""
+    parser = _BlueRomsMagnetParser()
+    parser.feed(body)
+    try:
+        decoded = base64.b64decode(parser.encoded, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return ""
+    return decoded if decoded.startswith("magnet:") else ""
 
 
 def _download_link(row: dict, *, private: bool = False) -> str:
@@ -163,6 +190,37 @@ class Prowlarr:
         self._privacy = privacy
         return privacy
 
+    def _resolve_blueroms(self, row: dict) -> dict:
+        """Replace BlueRoms' broken Prowlarr proxy with its encoded magnet.
+
+        BlueRoms no longer renders an ``a[href=magnet:...]``. Its download
+        page holds a Base64 magnet on a button instead, which Prowlarr 2.5
+        cannot decode and answers with HTTP 500. The result GUID is that page,
+        so resolve this one indexer at the search boundary and leave the
+        existing downloader pipeline unchanged.
+        """
+        if str(row.get("indexer") or "").casefold() != "blueroms":
+            return row
+        guid = str(row.get("guid") or "")
+        parsed = urlparse(guid)
+        if (parsed.scheme != "https"
+                or (parsed.hostname or "").casefold() not in {
+                    "blueroms.ws", "www.blueroms.ws"}
+                or not parsed.path.startswith("/download/")):
+            return row
+        try:
+            response = self._session.get(guid, timeout=self._config.timeout)
+            response.raise_for_status()
+            magnet = _blueroms_magnet(response.text)
+        except requests.RequestException as err:
+            log.warning("could not resolve BlueRoms magnet: %s",
+                        err.__class__.__name__)
+            return row
+        if not magnet:
+            log.warning("BlueRoms download page carried no usable magnet")
+            return row
+        return {**row, "magnetUrl": magnet}
+
     def search(self, term: str, *, limit: int = 100) -> list[Release]:
         """Search every configured indexer for a game."""
         url = self._url("search", query=term, categories=list(SEARCH_CATEGORIES),
@@ -173,7 +231,8 @@ class Prowlarr:
         )
         response.raise_for_status()
         privacy = self._private_ids()
-        return [self._to_release(row, privacy) for row in response.json()]
+        return [self._to_release(self._resolve_blueroms(row), privacy)
+                for row in response.json()]
 
     @staticmethod
     def _to_release(row: dict, privacy: dict[int, bool] | None = None) -> Release:
