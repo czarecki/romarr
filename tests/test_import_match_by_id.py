@@ -13,6 +13,8 @@ identify the download; the name is only the fallback.
 
 from __future__ import annotations
 
+import logging
+
 from romarr.app import QueueItem, ROMarr
 from romarr.downloaders import SabConfig, SABnzbd
 
@@ -80,6 +82,26 @@ def test_a_different_hash_does_not_claim_a_row_by_accident(tmp_path):
                               "content_path": str(tmp_path / "x")}])]
     assert s.import_finished() == []
     assert item.state == "grabbed"
+
+
+def test_an_imported_queue_item_is_skipped_before_its_moved_path_is_checked(
+        tmp_path, caplog):
+    s = svc(tmp_path)
+    missing = tmp_path / "moved-after-import.nes"
+    item = QueueItem(
+        "Contra", "nes", "Contra (USA).nes", 1, "imported",
+        release_id=f"btih:{HASH}")
+    s.queue.append(item)
+    s.clients = [FakeClient([{
+        "name": "Contra (USA).nes",
+        "hash": HASH,
+        "content_path": str(missing),
+    }])]
+
+    with caplog.at_level(logging.WARNING):
+        assert s.import_finished() == []
+
+    assert "does not exist" not in caplog.text
 
 
 def test_queue_item_without_download_id_loads_from_old_state(tmp_path):

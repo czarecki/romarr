@@ -49,6 +49,12 @@ def test_general_settings_expose_the_clock():
         assert key in html, key
 
 
+def test_media_settings_expose_move_completed_downloads():
+    html = page()
+    assert "move_completed_downloads" in html
+    assert "Move completed files" in html
+
+
 def test_the_stats_page_says_updates_are_never_automatic():
     assert "Nothing updates itself" in page()
 

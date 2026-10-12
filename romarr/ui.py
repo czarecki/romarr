@@ -2504,6 +2504,8 @@ RENDER.media=()=>settingsPage('Media Management',
      <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
        One per line: what the download client says = what ROMarr sees.
        Longest matching prefix wins.</div></div>`
+  +chk('move_completed_downloads','Move completed files instead of copying',
+       SETTINGS.move_completed_downloads)
   +sel('library_layout','Folder structure',
      [['flat','Structure A — platform/rom'],['nested','Structure B — platform/roms/rom']],
      SETTINGS.library_layout||'flat',
